@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reader App</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
+        h1 { text-align: center; color: #333; }
+        .upload-form { margin-bottom: 30px; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: flex; justify-content: center; align-items: center; gap: 10px; }
+        .job { background: #fff; border: 1px solid #ddd; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .input-file { margin-bottom: 15px; font-weight: bold; color: #555; }
+        .input-file a { color: #007bff; text-decoration: none; }
+        .input-file a:hover { text-decoration: underline; }
+        .audio-response { margin-top: 10px; }
+        .loading { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(0,0,0,.3); border-radius: 50%; border-top-color: #007bff; animation: spin 1s ease-in-out infinite; vertical-align: middle; margin-right: 10px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .error { color: #d9534f; font-weight: bold; }
+        .status-container { color: #666; font-style: italic; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background-color: #0056b3; }
+        input[type="file"] { padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Reader App</h1>
+    
+    <div class="upload-form">
+        <form method="POST" action="/upload" enctype="multipart/form-data">
+            <label for="file">Upload XML or TXT:</label>
+            <input type="file" name="file" accept=".xml,.txt" required>
+            <button type="submit">Upload & Process</button>
+        </form>
+    </div>
+
+    {% if jobs %}
+    <div style="text-align: right; margin-bottom: 20px;">
+        <form method="POST" action="/clear_history" onsubmit="return confirm('Are you sure you want to clear all history? This cannot be undone.');" style="display: inline;">
+            <button type="submit" style="background-color: #dc3545; padding: 8px 15px; font-size: 14px;">Clear History</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div id="job-list">
+        {% for job in jobs %}
+        <div class="job" id="job-{{ job.id }}" data-status="{{ job.status }}">
+            <div class="input-file">
+                Input File: <a href="/uploads/{{ job.stored_filename }}" target="_blank">{{ job.filename }}</a>
+            </div>
+            <div class="audio-response">
+                {% if job.status == 'completed' %}
+                    <audio controls style="width: 100%;">
+                        <source src="/audio/{{ job.audio_filename }}" type="audio/wav">
+                        Your browser does not support the audio element.
+                    </audio>
+                {% elif job.status == 'failed' %}
+                    <span class="error">Processing failed.</span>
+                {% else %}
+                    <div class="status-container">
+                        <span class="loading"></span> Processing... (Status: {{ job.status }})
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <script>
+        function checkStatus() {
+            const jobs = document.querySelectorAll('.job');
+            jobs.forEach(job => {
+                const status = job.getAttribute('data-status');
+                if (status === 'queued' || status === 'processing') {
+                    const jobId = job.id.replace('job-', '');
+                    fetch(`/status/${jobId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status !== status) {
+                                // Status changed, reload page to update UI
+                                if (data.status === 'completed' || data.status === 'failed') {
+                                    location.reload();
+                                }
+                            }
+                        })
+                        .catch(err => console.error('Error polling status:', err));
+                }
+            });
+        }
+
+        // Poll every 2 seconds
+        setInterval(checkStatus, 2000);
+    </script>
+</body>
+</html>

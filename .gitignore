@@ -1,0 +1,11 @@
+examples/
+
+*.pdf
+*.xml
+*.db
+*.wav
+
+__pycache__/
+*.pyc
+.venv/
+.venv_stable/
