@@ -1,5 +1,9 @@
 import xml.etree.ElementTree as ET
 import os
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
 
 class Extractor:
     def __init__(self, filename):
@@ -9,8 +13,47 @@ class Extractor:
         _, ext = os.path.splitext(self.filename)
         if ext.lower() == '.txt':
             return self._extract_txt()
+        elif ext.lower() == '.pdf':
+            return self._extract_pdf()
         else:
             return self._extract_xml()
+
+    def _extract_pdf(self):
+        if PdfReader is None:
+            print("pypdf not installed")
+            return "", "", []
+            
+        try:
+            reader = PdfReader(self.filename)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            
+            # Try to get title from metadata
+            title = ""
+            if reader.metadata and reader.metadata.title:
+                title = reader.metadata.title
+            
+            # If no metadata title, try first line if short
+            lines = text.strip().split('\n')
+            if not title and lines and len(lines[0]) < 100:
+                title = lines[0].strip()
+            
+            if not title:
+                title = "PDF Document"
+
+            # We don't have reliable abstract/section extraction for raw PDF text
+            # So we treat it all as one section
+            sections = [{
+                'section-title': '',
+                'section-text': text
+            }]
+            
+            return title, "", sections
+
+        except Exception as e:
+            print(f"Error reading PDF file: {e}")
+            return "", "", []
 
     def _extract_txt(self):
         try:
