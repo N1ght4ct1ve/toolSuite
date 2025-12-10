@@ -32,7 +32,8 @@ def init_db():
     # audio_filename is the file on disk in audio/
     c.execute('''CREATE TABLE IF NOT EXISTS jobs
                  (id TEXT PRIMARY KEY, filename TEXT, stored_filename TEXT, 
-                  audio_filename TEXT, status TEXT, created_at REAL)''')
+                  audio_filename TEXT, status TEXT, created_at REAL,
+                  progress INTEGER DEFAULT 0, total_chunks INTEGER DEFAULT 0)''')
     conn.commit()
     conn.close()
 
@@ -89,6 +90,57 @@ def process_audio_job():
             # Audio Generation Logic
             full_audio_buffer = []
             
+            # Helper function to split long text into paragraphs/sentences
+            def split_into_chunks(text, max_chars=500):
+                """Split text into smaller chunks for better progress tracking"""
+                if not text or not text.strip():
+                    return []
+                
+                # Split by paragraphs first (double newlines)
+                paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                
+                chunks = []
+                for para in paragraphs:
+                    # If paragraph is still too long, split by sentences
+                    if len(para) > max_chars:
+                        # Split by sentence-ending punctuation
+                        import re
+                        sentences = re.split(r'(?<=[.!?])\s+', para)
+                        current_chunk = ""
+                        for sentence in sentences:
+                            if len(current_chunk) + len(sentence) < max_chars:
+                                current_chunk += " " + sentence if current_chunk else sentence
+                            else:
+                                if current_chunk:
+                                    chunks.append(current_chunk.strip())
+                                current_chunk = sentence
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                    else:
+                        chunks.append(para)
+                
+                return chunks if chunks else [text]
+            
+            # Calculate total chunks for progress tracking
+            chunks_to_process = []
+            if title:
+                chunks_to_process.append(f"Title: {title}.")
+            if abstract:
+                chunks_to_process.append("Abstract.")
+                chunks_to_process.extend(split_into_chunks(abstract))
+            for section in sections:
+                if section.get('section-title'):
+                    chunks_to_process.append(f"Section: {section['section-title']}.")
+                if section.get('section-text'):
+                    chunks_to_process.extend(split_into_chunks(section['section-text']))
+            
+            total_chunks = len(chunks_to_process)
+            processed_chunks = [0]  # Use list to allow modification in nested function
+            
+            # Update total chunks in DB
+            c.execute("UPDATE jobs SET total_chunks=? WHERE id=?", (total_chunks, job_id))
+            conn.commit()
+            
             def process_text_chunk(text_chunk):
                 if not text_chunk or not text_chunk.strip():
                     return
@@ -96,32 +148,22 @@ def process_audio_job():
                 generator = reader.pipeline(text_chunk, voice='af_heart')
                 for _, _, audio in generator:
                     full_audio_buffer.append(audio)
-
-            # Title
-            if title:
-                process_text_chunk(f"Title: {title}.")
-                full_audio_buffer.append(np.zeros(int(24000 * 0.5)))
-
-            # Abstract
-            if abstract:
-                process_text_chunk("Abstract.")
-                full_audio_buffer.append(np.zeros(int(24000 * 0.5)))
-                process_text_chunk(abstract)
-                full_audio_buffer.append(np.zeros(int(24000 * 0.5)))
-
-            # Sections
-            for section in sections:
-                sec_title = section['section-title']
-                sec_text = section['section-text']
                 
-                if sec_title:
-                    process_text_chunk(f"Section: {sec_title}.")
+                # Update progress
+                processed_chunks[0] += 1
+                c.execute("UPDATE jobs SET progress=? WHERE id=?", (processed_chunks[0], job_id))
+                conn.commit()
+
+            # Process all chunks in order
+            silence = np.zeros(int(24000 * 0.3))  # 0.3s silence between chunks
+            
+            for i, chunk in enumerate(chunks_to_process):
+                process_text_chunk(chunk)
+                # Add silence after titles/headers (longer pause)
+                if chunk.startswith("Title:") or chunk.startswith("Section:") or chunk == "Abstract.":
                     full_audio_buffer.append(np.zeros(int(24000 * 0.5)))
-                
-                if sec_text:
-                    process_text_chunk(sec_text)
-                
-                full_audio_buffer.append(np.zeros(int(24000 * 0.5)))
+                else:
+                    full_audio_buffer.append(silence)
 
             if full_audio_buffer:
                 combined_audio = np.concatenate(full_audio_buffer)
@@ -189,11 +231,20 @@ def upload_file():
 def job_status(job_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT status, audio_filename FROM jobs WHERE id=?", (job_id,))
+    c.execute("SELECT status, audio_filename, progress, total_chunks FROM jobs WHERE id=?", (job_id,))
     row = c.fetchone()
     conn.close()
     if row:
-        return jsonify({'status': row[0], 'audio_filename': row[1]})
+        progress = row[2] or 0
+        total = row[3] or 0
+        percent = int((progress / total * 100) if total > 0 else 0)
+        return jsonify({
+            'status': row[0], 
+            'audio_filename': row[1],
+            'progress': progress,
+            'total_chunks': total,
+            'percent': percent
+        })
     return jsonify({'status': 'unknown'}), 404
 
 @app.route('/clear_history', methods=['POST'])

@@ -3,3 +3,4 @@ numpy
 soundfile
 pypdf
 kokoro
+ipython
